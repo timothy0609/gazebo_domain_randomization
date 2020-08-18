@@ -1,0 +1,139 @@
+#!/usr/bin/env python
+import roslib
+#roslib.load_manifest('kinect_pylistener')
+import sys
+import rospy
+import cv2
+import os
+import math
+from std_msgs.msg import String
+from sensor_msgs.msg import Image
+from sensor_msgs.msg import PointCloud2
+from gazebo_msgs.msg import ModelStates
+import sensor_msgs.point_cloud2 as pc2
+from struct import pack, unpack
+from matplotlib import pyplot as pyplot
+from mpl_toolkits.mplot3d import Axes3D
+from cv_bridge import CvBridge, CvBridgeError
+import time
+import numpy as np
+import message_filters
+from tf.transformations import euler_from_quaternion
+
+i=1
+im_size = 960*720
+class image_converter:
+
+  def __init__(self):
+    self.bridge = CvBridge()
+    image_sub = message_filters.Subscriber("/camera/color/image_raw", Image)
+    depth_sub = message_filters.Subscriber("/camera/depth/image_raw", Image)
+    model_poses = message_filters.Subscriber("/gazebo/model_states", ModelStates)
+    PC2 = message_filters.Subscriber("/camera/depth/points", PointCloud2)
+    self.ts = message_filters.ApproximateTimeSynchronizer([image_sub, depth_sub, PC2, model_poses], 1, 1,  allow_headerless=True)
+    self.ts.registerCallback(self.callback)
+    print "test2"
+
+  def callback(self,rgb_data, depth_data, PC2, model_poses):
+    global i, im_size
+    try:
+    	image = self.bridge.imgmsg_to_cv2(rgb_data, "bgr8")
+    	depth_image = self.bridge.imgmsg_to_cv2(depth_data, "passthrough")
+    	depth_array = np.array(depth_image, dtype=np.float32)
+    	color_array = np.array(image, dtype=np.uint8)
+     	depth_array[np.isnan(depth_array)] = 0
+     	cv2.normalize(depth_array, depth_array, 0, 1, cv2.NORM_MINMAX)
+      	print "depth_array"
+      	print np.max(depth_array)
+      	print np.min(depth_array)
+      	print np.nanmax(depth_array)
+      	print np.nanmin(depth_array)
+      	depth_list = depth_array.tolist()
+      	label = np.zeros((len(depth_list), len(depth_list[0])))
+      	for j in range(len(depth_list)):
+        	for k in range(len(depth_list[0])):
+        	  if (depth_list[j][k] < 0.99):
+        	    label[j][k] = 1
+    		l = np.array(label)
+    	rospy.loginfo(image.shape)
+    	'''cv2.imwrite('/home/parallels/catkin_ws/src/gazebo_domain_randomization-master/tr_data/img/color/'+str(i)+'camera_rgb.jpg', color_array)
+      	cv2.imwrite('/home/parallels/catkin_ws/src/gazebo_domain_randomization-master/tr_data/img/depth/'+str(i)+'camera_depth.pgm', depth_array*255)
+      	cv2.imwrite('/home/parallels/catkin_ws/src/gazebo_domain_randomization-master/tr_data/img/label_img/'+str(i)+'label_img.pgm', l*255)
+      	np.savetxt('/home/parallels/catkin_ws/src/gazebo_domain_randomization-master/tr_data/array/arr/'+str(i)+'depth_array.txt', depth_array, delimiter = ',')
+      	np.savetxt('/home/parallels/catkin_ws/src/gazebo_domain_randomization-master/tr_data/array/label/'+str(i)+'label_array.txt', l, delimiter=',')
+      	'''
+      
+      
+     	
+     	if i%5==0:
+     		n = 0
+     		for i in range(len(model_poses.name)):
+     			if model_poses.name[i] == "depth_camera":
+     				n = i
+     			else:
+     				continue
+     		print(model_poses.name[n])
+
+	    	orient_q = model_poses.pose[n].orientation
+	    	orient_list = [orient_q.x, orient_q.y, orient_q.z, orient_q.w]
+	    	(roll, pitch, yaw) = euler_from_quaternion(orient_list)
+	    	cy = np.cos(yaw)
+	    	cp = np.cos(pitch)
+	    	sy = np.sin(yaw)
+	    	sp = np.sin(pitch)
+	    	cx = np.cos(1.57)
+	    	sx = np.cos(1.57)
+	    	inv_array = np.array([[cy*cp, sy*cp, -sp],
+	    	                      [-sy, cy , 0],
+	    	                      [cy*sp, sy*sp, cp]])
+	    	trans_array = np.array([[cx*cx, -sx, cx*sx],
+	    	                       [sx*cx, cx , sx*sx],
+	    	                       [-sx, 0, cx]])
+	    	z = np.array([0,0,1])
+	    	print(inv_array, trans_array, z)
+	    	perpend_z = trans_array*inv_array*z
+	    	print(perpend_z)
+	    	cv2.imwrite('/home/parallels/data/'+'camera_rgb_'+str(i/5).zfill(5)+'.jpg', color_array)
+ 			#cv2.imwrite('/home/parallels/catkin_ws/src/gazebo_domain_randomization-master/tr_data/img/depth/'+str(i/5)+'camera_depth.pgm', depth_array*255)
+        	#cv2.imwrite('/home/parallels/catkin_ws/src/gazebo_domain_randomization-master/tr_data/img/label_img/'+str(i/5)+'label_img.pgm', l*255)
+        	#np.savetxt('/home/parallels/catkin_ws/src/gazebo_domain_randomization-master/tr_data/array/arr/'+str(i/5)+'depth_array.txt', depth_array, delimiter = ',')
+        	#np.savetxt('/home/parallels/catkin_ws/src/gazebo_domain_randomization-master/tr_data/array/label/'+str(i/5)+'label_array.txt', l, delimiter=',')
+        	
+	    	j=0
+	    	p=[0]*im_size
+	    	for point in pc2.read_points(PC2, field_names={'x','y','z'}, skip_nans=True):
+	    		coor = np.array([point[0], point[1], point[2]])
+	    		#print(point[0], point[1], point[2],(rgb>>16)&0x0000ff, (rgb>>8)&0x0000ff, (rgb)&0x0000ff) #r,g,b
+	    		if ((-0.5<point[2]) and (point[2] < 20)):
+	    			if (np.dot(perpend_z, coor) > (model_poses.pose[n].position.z-0.1)).any():
+	    				p[j] = 1
+	    				j += 1
+	    			else:
+	    				j += 1
+	    				continue
+			
+			point_label = np.reshape(p, (-1,960))
+			pl = np.array(point_label)
+        	#np.savetxt('/home/parallels/catkin_ws/src/gazebo_domain_randomization-master/tr_data/array/point_label/'+str(i/5)+'point_label_array.txt', pl, delimiter = ',')
+			cv2.imwrite('/home/parallels/data/'+'point_label_img_'+str(i/5).zfill(5)+'.pgm', pl*255)
+      	
+		print "test3"
+    	i += 1
+    except CvBridgeError as e:
+    	print(e)
+
+
+
+def main(args):
+  print "test1"
+  ic = image_converter()
+  rospy.init_node('image_converter', anonymous=True)
+  while not rospy.is_shutdown():
+    try:
+      rospy.sleep(50)
+    except KeyboardInterrupt:
+      print("Shutting down")
+    cv2.destroyAllWindows()
+
+if __name__ == '__main__':
+    main(sys.argv)
